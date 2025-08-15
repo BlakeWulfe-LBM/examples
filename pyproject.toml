@@ -7,12 +7,12 @@ name = "examples"
 version = "0.1.0"
 description = "Example code demonstrating various patterns and libraries"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.12"
 authors = [
     {name = "Examples Author", email = "author@example.com"}
 ]
 dependencies = [
-    "draccus",
+    "draccus>=0.11.5",
 ]
 
 [project.optional-dependencies]
@@ -40,7 +40,10 @@ profile = "black"
 line_length = 88
 
 [tool.mypy]
-python_version = "3.8"
+python_version = "3.12"
 warn_return_any = true
 warn_unused_configs = true
-disallow_untyped_defs = true 
+disallow_untyped_defs = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/examples"] 
