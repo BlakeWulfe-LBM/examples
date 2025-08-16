@@ -159,4 +159,8 @@ cython_debug/
 #.idea/
 
 # uv
-.uv/ 
+.uv/
+
+# MosaicML Streaming example outputs
+streaming_data/
+local_cache/ 

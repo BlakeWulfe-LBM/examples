@@ -16,6 +16,9 @@ dependencies = [
     "webdataset>=0.2.0",
     "click>=8.0.0",
     "torch>=2.0.0",
+    "mosaicml-streaming",
+    "numpy",
+    "tqdm",
 ]
 
 [project.optional-dependencies]
