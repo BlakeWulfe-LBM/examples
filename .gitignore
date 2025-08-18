@@ -164,3 +164,7 @@ cython_debug/
 # MosaicML Streaming example outputs
 streaming_data/
 local_cache/ 
+
+# Profiling outputs
+profiling_results.json
+profiling_results.png
