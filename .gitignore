@@ -166,5 +166,7 @@ streaming_data/
 local_cache/ 
 
 # Profiling outputs
+profiling_results_*.json
+profiling_results_*.png
 profiling_results.json
 profiling_results.png

@@ -948,9 +948,9 @@ Examples:
                        help='Batch sizes to test (default: 64)')
     parser.add_argument('--num-workers', nargs='+', type=int, default=[0, 4, 8],
                        help='Number of workers to test (default: 0 4 8)')
-    parser.add_argument('--dataset-size', type=int, default=500,
+    parser.add_argument('--dataset-size', type=int, default=1000,
                        help='Number of samples in dataset (default: 500)')
-    parser.add_argument('--num-runs', type=int, default=2,
+    parser.add_argument('--num-runs', type=int, default=3,
                        help='Number of runs per configuration for averaging (default: 3)')
     parser.add_argument('--num-batches', type=int, default=None,
                        help='Number of batches to process (default: all)')
@@ -1015,18 +1015,37 @@ Examples:
         model_complexity=args.model_complexity
     )
     
+    # Generate dynamic filenames if forward pass simulation is enabled
+    if args.should_simulate_forward_pass:
+        # Extract base name and extension from the default filenames
+        results_base = os.path.splitext(args.save_results)[0]
+        plot_base = os.path.splitext(args.save_plot)[0]
+        results_ext = os.path.splitext(args.save_results)[1]
+        plot_ext = os.path.splitext(args.save_plot)[1]
+        
+        # Create new filenames with model complexity and forward pass time
+        results_file = f"{results_base}_{args.model_complexity}_fp{args.forward_pass_time}ms{results_ext}"
+        plot_file = f"{plot_base}_{args.model_complexity}_fp{args.forward_pass_time}ms{plot_ext}"
+        
+        print(f"\n📁 Using dynamic filenames for forward pass simulation:")
+        print(f"   Results: {results_file}")
+        print(f"   Plot: {plot_file}")
+    else:
+        results_file = args.save_results
+        plot_file = args.save_plot
+    
     # Save results
-    save_results(results, args.save_results)
+    save_results(results, results_file)
     
     # Print summary
     print_summary(results)
     
     # Plot results
-    plot_results(results, args.save_plot)
+    plot_results(results, plot_file)
     
     print("\n✅ Profiling complete!")
-    print(f"   Results saved to: {args.save_results}")
-    print(f"   Plot saved to: {args.save_plot}")
+    print(f"   Results saved to: {results_file}")
+    print(f"   Plot saved to: {plot_file}")
 
 
 if __name__ == "__main__":
