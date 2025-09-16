@@ -43,7 +43,7 @@ def test_distributed():
             os.environ['NCCL_DEBUG'] = 'INFO'
             os.environ['NCCL_ASYNC_ERROR_HANDLING'] = '1'
             # Try P2P disable which sometimes helps with multi-GPU issues
-            os.environ['NCCL_P2P_DISABLE'] = '1'
+            os.environ['NCCL_P2P_DISABLE'] = '0'
         else:
             print(f"[Rank {rank}] Using CPU (Gloo backend)")
             backend = 'gloo'
