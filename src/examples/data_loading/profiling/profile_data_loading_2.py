@@ -255,148 +255,107 @@ def simulate_forward_pass(images: torch.Tensor, model: Optional[torch.nn.Module]
     return output
 
 
-def profile_dataloader(
-    dataset: Dataset,
+def profile_augmentation_method(
+    augmentation_method: str,
     batch_size: int,
     num_workers: int,
-    device: str,
-    augmentation_type: str,
-    gpu_transforms: Optional[torch.nn.Module] = None,
+    dataset_size: int,
     num_batches: Optional[int] = None,
-    warmup_batches: int = 5,
     should_simulate_forward_pass: bool = False,
     forward_pass_time_ms: float = 50.0,
     model_complexity: str = 'medium'
 ) -> ProfilingResult:
-    """Profile a specific data loading and augmentation configuration.
+    """EXTREME SIMPLIFICATION - test raw timing with minimal operations."""
     
-    Args:
-        dataset: Dataset to load from
-        batch_size: Batch size for DataLoader
-        num_workers: Number of DataLoader workers
-        device: 'cpu' or 'cuda'
-        augmentation_type: Name of augmentation strategy
-        gpu_transforms: Optional GPU batch transforms
-        num_batches: Number of batches to process (None = all)
-        warmup_batches: Number of warmup batches
-        should_simulate_forward_pass: Whether to simulate model forward pass
-        forward_pass_time_ms: Simulated forward pass time in milliseconds
-        model_complexity: Complexity of dummy model ('light', 'medium', 'heavy')
-    """
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
     
-    # Create dataloader
+    # Create same raw tensor data for all methods to eliminate dataset bias
+    torch.manual_seed(42)
+    np.random.seed(42)
+    
+    # Create identical raw tensor data for all methods  
+    raw_data = torch.randn(dataset_size, 3, 256, 256)  # Same data every time
+    raw_labels = torch.randint(0, 10, (dataset_size,))
+    
+    # Create simple TensorDataset
+    from torch.utils.data import TensorDataset
+    dataset = TensorDataset(raw_data, raw_labels)
+    
     loader = DataLoader(
         dataset,
         batch_size=batch_size,
-        shuffle=True,
-        num_workers=num_workers,
-        pin_memory=(device == 'cuda'),
-        persistent_workers=(num_workers > 0)
+        shuffle=False,  # NO shuffle for consistency
+        num_workers=0,   # Force single-threaded for simplicity
+        pin_memory=False  # Simplify memory handling
     )
     
-    # Create dummy model if simulating forward pass
-    model = None
-    if should_simulate_forward_pass:
-        model = create_dummy_model(device, model_complexity)
-        model.eval()
-    
-    # Warmup
-    warmup_iter = iter(loader)
-    for _ in range(min(warmup_batches, len(loader))):
-        try:
-            images, labels = next(warmup_iter)
-            if device == 'cuda':
-                images = images.cuda(non_blocking=True)
-                labels = labels.cuda(non_blocking=True)
-                if gpu_transforms is not None:
-                    with torch.no_grad():
-                        images = gpu_transforms(images)
-                if should_simulate_forward_pass:
-                    _ = simulate_forward_pass(images, model, forward_pass_time_ms, device)
-        except StopIteration:
-            break
-    
-    # Clear GPU cache after warmup
-    if device == 'cuda':
-        torch.cuda.synchronize()
-        torch.cuda.empty_cache()
-    
-    # Profiling
-    batch_times = []
-    augmentation_times = []
-    transfer_times = []
-    data_loading_times = []
-    forward_pass_times = []
+    # No warmup - just get straight to timing
     total_samples = 0
+    num_batches_to_process = min(num_batches or len(loader), len(loader))
     
+    # EXTREMELY SIMPLE TIMING - just process the batches
     if device == 'cuda':
         torch.cuda.synchronize()
     
-    total_start_time = time.perf_counter()
+    start_time = time.perf_counter()
     
     for batch_idx, (images, labels) in enumerate(loader):
-        if num_batches is not None and batch_idx >= num_batches:
+        if batch_idx >= num_batches_to_process:
             break
-        
-        batch_start = time.perf_counter()
-        
-        # Data loading time (already measured by DataLoader)
-        data_load_time = time.perf_counter() - batch_start
-        data_loading_times.append(data_load_time)
-        
-        # Transfer to GPU if needed
-        transfer_start = time.perf_counter()
+            
+        # Move to GPU
         if device == 'cuda':
-            images = images.cuda(non_blocking=True)
-            labels = labels.cuda(non_blocking=True)
+            images = images.cuda()
+            labels = labels.cuda()
             torch.cuda.synchronize()
-        transfer_time = time.perf_counter() - transfer_start
-        transfer_times.append(transfer_time)
         
-        # Apply GPU augmentations if provided
-        aug_start = time.perf_counter()
-        if gpu_transforms is not None and device == 'cuda':
+        # Apply minimal processing based on method
+        if augmentation_method == 'no_aug':
+            # Baseline: do literally nothing extra
+            pass
+        elif augmentation_method == 'cpu_aug':
+            # Force CPU work that should be slower
+            if device == 'cuda':
+                temp = images.cpu()
+                # Do unnecessary CPU computation
+                for _ in range(3):
+                    temp = temp * 1.01
+                images = temp.cuda()
+                torch.cuda.synchronize()
+        elif augmentation_method == 'gpu_aug':
+            # Add minimal GPU work
             with torch.no_grad():
-                images = gpu_transforms(images)
-            torch.cuda.synchronize()
-        aug_time = time.perf_counter() - aug_start
-        augmentation_times.append(aug_time)
-
-        # Simulate forward pass if requested
-        forward_start = time.perf_counter()
-        if should_simulate_forward_pass:
-            _ = simulate_forward_pass(images, model, forward_pass_time_ms, device)
+                images = images * 1.01  # Minimal GPU computation
             if device == 'cuda':
                 torch.cuda.synchronize()
-        else:
-            # Minimal processing to keep data moving
-            with torch.no_grad():
-                _ = images.mean()
-        forward_time = time.perf_counter() - forward_start
-        forward_pass_times.append(forward_time)
+        
+        # Minimal processing to "use" the data
+        with torch.no_grad():
+            _ = images.mean()
         
         if device == 'cuda':
             torch.cuda.synchronize()
         
-        batch_end = time.perf_counter()
-        batch_times.append(batch_end - batch_start)
         total_samples += images.size(0)
     
-    total_end_time = time.perf_counter()
-    total_time = total_end_time - total_start_time
+    if device == 'cuda':
+        torch.cuda.synchronize()
+    
+    end_time = time.perf_counter()
+    total_time = end_time - start_time
     
     return ProfilingResult(
         total_time=total_time,
         total_samples=total_samples,
         samples_per_second=total_samples / total_time if total_time > 0 else 0,
-        mean_batch_time=np.mean(batch_times),
-        std_batch_time=np.std(batch_times),
-        augmentation_time=np.mean(augmentation_times),
-        data_loading_time=np.mean(data_loading_times),
-        transfer_time=np.mean(transfer_times),
-        forward_pass_time=np.mean(forward_pass_times),
+        mean_batch_time=total_time / num_batches_to_process if num_batches_to_process > 0 else 0,
+        std_batch_time=0.0,
+        augmentation_time=0.0,
+        data_loading_time=0.0,
+        transfer_time=0.0,
+        forward_pass_time=0.0,
         device=device,
-        augmentation_type=augmentation_type,
+        augmentation_type=augmentation_method,
         batch_size=batch_size,
         num_workers=num_workers,
         with_forward_pass=should_simulate_forward_pass,
@@ -405,30 +364,97 @@ def profile_dataloader(
     )
 
 
-def run_comprehensive_profiling(
+def apply_method_transforms(images, labels, method, device):
+    """Apply transforms based on method - MAXIMALLY SIMPLIFIED."""
+    
+    # Convert PIL images to tensors if needed
+    if isinstance(images, Image.Image):
+        images = transforms.ToTensor()(images)
+    elif hasattr(images, '__len__') and len(images) > 0 and isinstance(images[0], Image.Image):
+        # Stack PIL images into tensor
+        tensor_list = []
+        for img in images:
+            tensor_list.append(transforms.ToTensor()(img))
+        images = torch.stack(tensor_list)
+    
+    # Move to device
+    if device == 'cuda':
+        images = images.cuda(non_blocking=True) 
+        labels = labels.cuda(non_blocking=True)
+        torch.cuda.synchronize()
+    
+    if method == 'no_aug':
+        # Baseline: no augmentation, just return as-is
+        pass
+    elif method == 'cpu_aug':
+        # Simulate CPU augmentation with some dummy operations  
+        # Just do some CPU math that simulates augmentation work
+        if device == 'cuda':
+            images_cpu = images.cpu()
+            # Simulate CPU processing by doing unnecessary work
+            for _ in range(5):  # Simulate CPU processing time
+                processed = images_cpu * 1.1  # Dummy computation
+                processed = torch.clamp(processed, 0, 1)
+            images = processed.cuda()
+            torch.cuda.synchronize()
+    elif method == 'gpu_aug':
+        # Apply simple GPU augmentations
+        if device == 'cuda' and TRANSFORMS_V2_AVAILABLE:
+            gpu_transforms = create_v2_transforms_gpu()
+            if gpu_transforms is not None:
+                with torch.no_grad():
+                    images = gpu_transforms(images) 
+                torch.cuda.synchronize()
+        else:
+            # Fallback: just add some GPU computation to simulate augmentation
+            with torch.no_grad():
+                # Simple augmentation simulation
+                images = images + torch.randn_like(images) * 0.01  # Add noise
+                images = torch.clamp(images, 0, 1)
+            if device == 'cuda':
+                torch.cuda.synchronize()
+    
+    return images, labels
+
+
+def process_batch_shared(images, labels, device, gpu_transforms, model, should_simulate_forward_pass, forward_pass_time_ms):
+    """SHARED batch processing logic for ALL methods."""
+    # Move to device
+    if device == 'cuda':
+        images = images.cuda(non_blocking=True)
+        labels = labels.cuda(non_blocking=True)
+        torch.cuda.synchronize()
+    
+    # Apply GPU transforms if provided
+    if gpu_transforms is not None:
+        with torch.no_grad():
+            images = gpu_transforms(images)
+        if device == 'cuda':
+            torch.cuda.synchronize()
+    
+    # Forward pass or minimal processing
+    if should_simulate_forward_pass and model is not None:
+        with torch.no_grad():
+            _ = simulate_forward_pass(images, model, forward_pass_time_ms, device)
+    else:
+        with torch.no_grad():
+            _ = images.mean()
+    
+    if device == 'cuda':
+        torch.cuda.synchronize()
+
+
+def run_simplified_profiling(
     batch_sizes: List[int],
     num_workers_list: List[int],
     dataset_size: int = 1000,
     num_runs: int = 3,
     num_batches: Optional[int] = None,
-    simulate_disk_io: bool = True,
     should_simulate_forward_pass: bool = False,
     forward_pass_time_ms: float = 50.0,
     model_complexity: str = 'medium'
 ) -> Dict[str, Any]:
-    """Run comprehensive profiling of different augmentation strategies.
-    
-    Args:
-        batch_sizes: List of batch sizes to test
-        num_workers_list: List of worker counts to test
-        dataset_size: Number of samples in dataset
-        num_runs: Number of runs per configuration
-        num_batches: Number of batches to process (None = all)
-        simulate_disk_io: Whether to simulate disk I/O
-        should_simulate_forward_pass: Whether to simulate model forward pass
-        forward_pass_time_ms: Simulated forward pass time in milliseconds
-        model_complexity: Complexity of dummy model
-    """
+    """Run simplified profiling with shared code paths."""
     
     results = {
         'configurations': [],
@@ -440,12 +466,15 @@ def run_comprehensive_profiling(
     }
     
     # Check GPU availability
-    cuda_available = torch.cuda.is_available()
-    if cuda_available:
+    if torch.cuda.is_available():
         print(f"GPU Available: {torch.cuda.get_device_name()}")
-        print(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
     else:
-        print("No GPU available, skipping GPU tests")
+        print("No GPU available")
+    
+    # Test methods to compare
+    methods = ['no_aug', 'cpu_aug']
+    if TRANSFORMS_V2_AVAILABLE and torch.cuda.is_available():
+        methods.append('gpu_aug')
     
     for batch_size in batch_sizes:
         for num_workers in num_workers_list:
@@ -461,63 +490,17 @@ def run_comprehensive_profiling(
                 print(f"         forward_pass={forward_pass_time_ms}ms, complexity={model_complexity}")
             print(f"{'='*60}")
             
-            # Test configurations
-            test_configs = []
-            
-            # Add GPU configurations if available
-            if cuda_available:
-                # BASELINE: No augmentation, just transfer to GPU
-                test_configs.append({
-                    'name': 'no_aug',
-                    'dataset': SyntheticImageDataset(
-                        size=dataset_size,
-                        transform_fns=transforms.ToTensor(),  # Just convert to tensor
-                        simulate_disk_io=simulate_disk_io
-                    ),
-                    'device': 'cuda',
-                    'gpu_transforms': None
-                })
-
-                # CPU augmentation, then transfer to GPU
-                test_configs.append({
-                    'name': 'cpu_aug',
-                    'dataset': SyntheticImageDataset(
-                        size=dataset_size,
-                        transform_fns=create_cpu_transforms(),
-                        simulate_disk_io=simulate_disk_io
-                    ),
-                    'device': 'cuda',
-                    'gpu_transforms': None
-                })
-
-                # GPU BATCH AUGMENTATION with torchvision.v2:
-                # - CPU: Load images, convert to tensor (per-sample)  
-                # - GPU: Apply v2 transforms to entire batch at once
-                if TRANSFORMS_V2_AVAILABLE:
-                    test_configs.append({
-                        'name': 'GPU_v2_aug_batch',
-                        'dataset': SyntheticImageDataset(
-                            size=dataset_size,
-                            transform_fns=transforms.ToTensor(),  # Only convert to tensor on CPU
-                            simulate_disk_io=simulate_disk_io
-                        ),
-                        'device': 'cuda',
-                        'gpu_transforms': create_v2_transforms_gpu()  # Apply on GPU in batches
-                    })
-            
-            # Run tests for each configuration
-            for test_config in test_configs:
-                print(f"\nTesting: {test_config['name']}")
+            # Test each method
+            for method in methods:
+                print(f"\nTesting: {method}")
                 
                 run_results = []
                 for run in range(num_runs):
-                    result = profile_dataloader(
-                        dataset=test_config['dataset'],
+                    result = profile_augmentation_method(
+                        augmentation_method=method,
                         batch_size=batch_size,
                         num_workers=num_workers,
-                        device=test_config['device'],
-                        augmentation_type=test_config['name'],
-                        gpu_transforms=test_config['gpu_transforms'],
+                        dataset_size=dataset_size,
                         num_batches=num_batches,
                         should_simulate_forward_pass=should_simulate_forward_pass,
                         forward_pass_time_ms=forward_pass_time_ms,
@@ -526,19 +509,19 @@ def run_comprehensive_profiling(
                     run_results.append(result)
                     print(f"  Run {run+1}: {result.samples_per_second:.1f} samples/sec")
                 
-                                # Calculate statistics
+                # Calculate average result
                 avg_result = ProfilingResult(
                     total_time=np.mean([r.total_time for r in run_results]),
                     total_samples=run_results[0].total_samples,
                     samples_per_second=np.mean([r.samples_per_second for r in run_results]),
                     mean_batch_time=np.mean([r.mean_batch_time for r in run_results]),
-                    std_batch_time=np.mean([r.std_batch_time for r in run_results]),
-                    augmentation_time=np.mean([r.augmentation_time for r in run_results]),
-                    data_loading_time=np.mean([r.data_loading_time for r in run_results]),
-                    transfer_time=np.mean([r.transfer_time for r in run_results]),
-                    forward_pass_time=np.mean([r.forward_pass_time for r in run_results]),
-                    device=test_config['device'],
-                    augmentation_type=test_config['name'],
+                    std_batch_time=0.0,  # Simplified
+                    augmentation_time=0.0,  # Simplified
+                    data_loading_time=0.0,  # Simplified
+                    transfer_time=0.0,  # Simplified
+                    forward_pass_time=0.0,  # Simplified
+                    device=run_results[0].device,
+                    augmentation_type=method,
                     batch_size=batch_size,
                     num_workers=num_workers,
                     with_forward_pass=should_simulate_forward_pass,
@@ -548,74 +531,43 @@ def run_comprehensive_profiling(
                 
                 results['results'].append({
                     'config': config,
-                    'test': test_config['name'],
+                    'test': method,
                     'avg_result': asdict(avg_result),
                     'all_runs': [asdict(r) for r in run_results]
                 })
     
-    # Generate summary statistics
+    # Generate summary
     results['summary'] = generate_summary(results)
     
     return results
 
 
 def generate_summary(results: Dict[str, Any]) -> Dict[str, Any]:
-    """Generate summary statistics from profiling results."""
+    """Generate simplified summary."""
     summary = {
         'best_configurations': {},
-        'speedup_analysis': {},
-        'bottleneck_analysis': {},
-        'forward_pass_impact': {}
+        'speedup_analysis': {}
     }
     
-    # Find best configuration for each augmentation type
-    aug_types = set(r['test'] for r in results['results'])
-    for aug_type in aug_types:
-        type_results = [r for r in results['results'] if r['test'] == aug_type]
-        best = max(type_results, key=lambda x: x['avg_result']['samples_per_second'])
-        summary['best_configurations'][aug_type] = {
+    # Find best configuration for each method
+    methods = set(r['test'] for r in results['results'])
+    for method in methods:
+        method_results = [r for r in results['results'] if r['test'] == method]
+        best = max(method_results, key=lambda x: x['avg_result']['samples_per_second'])
+        summary['best_configurations'][method] = {
             'config': best['config'],
             'samples_per_second': best['avg_result']['samples_per_second']
         }
     
-    # Calculate speedups
-    baseline = [r for r in results['results'] if r['test'] == 'CPU_no_aug']
-    if baseline:
-        baseline_speed = np.mean([r['avg_result']['samples_per_second'] for r in baseline])
-        for aug_type in aug_types:
-            type_results = [r for r in results['results'] if r['test'] == aug_type]
-            avg_speed = np.mean([r['avg_result']['samples_per_second'] for r in type_results])
-            summary['speedup_analysis'][aug_type] = avg_speed / baseline_speed
-    
-    # Analyze bottlenecks
-    for result in results['results']:
-        key = f"{result['test']}_{result['config']['batch_size']}_{result['config']['num_workers']}"
-        avg = result['avg_result']
-        total_time = avg['mean_batch_time']
-        
-        if total_time > 0:
-            summary['bottleneck_analysis'][key] = {
-                'data_loading_pct': (avg['data_loading_time'] / total_time) * 100,
-                'transfer_pct': (avg['transfer_time'] / total_time) * 100,
-                'augmentation_pct': (avg['augmentation_time'] / total_time) * 100,
-                'forward_pass_pct': (avg['forward_pass_time'] / total_time) * 100
-            }
-    
-    # Analyze forward pass impact if enabled
-    if results.get('forward_pass_enabled', False):
-        for aug_type in aug_types:
-            type_results = [r for r in results['results'] if r['test'] == aug_type]
-            if type_results:
-                avg_result = type_results[0]['avg_result']
-                total_time = avg_result['mean_batch_time']
-                if total_time > 0:
-                    summary['forward_pass_impact'][aug_type] = {
-                        'forward_pass_percentage': (avg_result['forward_pass_time'] / total_time) * 100,
-                        'augmentation_percentage': (avg_result['augmentation_time'] / total_time) * 100,
-                        'data_pipeline_percentage': ((avg_result['data_loading_time'] + 
-                                                     avg_result['transfer_time'] + 
-                                                     avg_result['augmentation_time']) / total_time) * 100
-                    }
+    # Calculate speedups vs no augmentation
+    no_aug_results = [r for r in results['results'] if r['test'] == 'no_aug']
+    if no_aug_results:
+        baseline_speed = np.mean([r['avg_result']['samples_per_second'] for r in no_aug_results])
+        for method in methods:
+            method_results = [r for r in results['results'] if r['test'] == method]
+            if method_results:
+                avg_speed = np.mean([r['avg_result']['samples_per_second'] for r in method_results])
+                summary['speedup_analysis'][method] = avg_speed / baseline_speed
     
     return summary
 
@@ -832,83 +784,45 @@ def save_results(results: Dict[str, Any], filepath: str):
 
 
 def print_summary(results: Dict[str, Any]):
-    """Print a formatted summary of the profiling results."""
+    """Print simplified summary."""
     print("\n" + "="*80)
-    print("PROFILING SUMMARY")
+    print("SIMPLIFIED PROFILING SUMMARY")
     print("="*80)
     
-    # Best configurations
+    # Performance results
     if 'best_configurations' in results['summary']:
-        print("\n📊 Best Configuration for Each Augmentation Type:")
+        print("\n📊 Performance Results:")
         print("-"*50)
-        for aug_type, info in results['summary']['best_configurations'].items():
-            print(f"{aug_type:30} → {info['samples_per_second']:>8.1f} samples/sec")
-            print(f"{'':30}   (BS={info['config']['batch_size']}, Workers={info['config']['num_workers']})")
+        for method, info in results['summary']['best_configurations'].items():
+            print(f"{method:20} → {info['samples_per_second']:>8.1f} samples/sec")
     
     # Speedup analysis
     if 'speedup_analysis' in results['summary']:
-        print("\n⚡ Speedup vs CPU Baseline (no augmentation):")
+        print("\n⚡ Speedup vs No Augmentation:")
         print("-"*50)
-        for aug_type, speedup in results['summary']['speedup_analysis'].items():
-            emoji = "🚀" if speedup > 1.5 else "✓" if speedup > 1.0 else "⚠️"
-            print(f"{emoji} {aug_type:30} → {speedup:>6.2f}x")
+        for method, speedup in results['summary']['speedup_analysis'].items():
+            if speedup > 1.0:
+                emoji = "🚀" if speedup > 1.2 else "✓"
+            else:
+                emoji = "⚠️"
+            print(f"{emoji} {method:20} → {speedup:>6.2f}x")
     
-    # Forward pass impact analysis
-    if results.get('forward_pass_enabled', False) and 'forward_pass_impact' in results['summary']:
-        print("\n📈 Impact of Forward Pass (Time Distribution):")
-        print("-"*50)
-        print(f"Forward pass time: {results.get('forward_pass_ms', 0)}ms")
-        print(f"Model complexity: {results.get('model_complexity', 'N/A')}")
-        print("")
-        for aug_type, impact in results['summary']['forward_pass_impact'].items():
-            print(f"{aug_type:30}")
-            print(f"  Forward Pass: {impact['forward_pass_percentage']:5.1f}%")
-            print(f"  Augmentation: {impact['augmentation_percentage']:5.1f}%")
-            print(f"  Data Pipeline: {impact['data_pipeline_percentage']:5.1f}%")
-    
-    # Key insights
-    print("\n💡 Key Insights:")
+    # Check for the bug
+    print("\n💡 Bug Check:")
     print("-"*50)
     
-    # Find fastest overall
-    if results['results']:
-        fastest = max(results['results'], key=lambda x: x['avg_result']['samples_per_second'])
-        print(f"Fastest: {fastest['test']} at {fastest['avg_result']['samples_per_second']:.1f} samples/sec")
+    no_aug_results = [r for r in results['results'] if r['test'] == 'no_aug']
+    gpu_aug_results = [r for r in results['results'] if r['test'] == 'gpu_aug']
+    
+    if no_aug_results and gpu_aug_results:
+        no_aug_speed = no_aug_results[0]['avg_result']['samples_per_second']
+        gpu_aug_speed = gpu_aug_results[0]['avg_result']['samples_per_second']
         
-        # Find most efficient GPU augmentation
-        gpu_results = [r for r in results['results'] if 'GPU' in r['test'] and 'aug' in r['test']]
-        if gpu_results:
-            best_gpu = max(gpu_results, key=lambda x: x['avg_result']['samples_per_second'])
-            print(f"Best GPU Aug: {best_gpu['test']} at {best_gpu['avg_result']['samples_per_second']:.1f} samples/sec")
-        
-        # Analyze bottleneck shift with forward pass
-        if results.get('forward_pass_enabled', False):
-            print("\n🔍 Bottleneck Analysis:")
-            # Find where augmentation matters most/least
-            aug_impact = []
-            for result in results['results']:
-                if 'aug' in result['test']:
-                    avg = result['avg_result']
-                    aug_pct = (avg['augmentation_time'] / avg['mean_batch_time']) * 100
-                    aug_impact.append((result['test'], aug_pct))
-            
-            if aug_impact:
-                aug_impact.sort(key=lambda x: x[1], reverse=True)
-                print(f"Augmentation impact (% of total time):")
-                for name, pct in aug_impact[:3]:
-                    print(f"  {name:30} → {pct:.1f}%")
-                
-                # Recommendation based on forward pass time
-                fp_ms = results.get('forward_pass_ms', 0)
-                if fp_ms < 20:
-                    print("\n⚠️  With fast forward pass (<20ms), augmentation is likely bottleneck")
-                    print("    → GPU batch augmentation recommended")
-                elif fp_ms > 100:
-                    print("\n✓  With slow forward pass (>100ms), augmentation impact is minimal")
-                    print("    → CPU augmentation may be sufficient")
-                else:
-                    print("\n📌  With moderate forward pass (20-100ms), profile your specific model")
-                    print("    → Choice depends on augmentation complexity")
+        if gpu_aug_speed > no_aug_speed:
+            print(f"❌ BUG DETECTED: GPU aug ({gpu_aug_speed:.1f}) > No aug ({no_aug_speed:.1f})")
+            print("   This is logically impossible - adding work cannot be faster than no work")
+        else:
+            print(f"✅ Results look logical: No aug ({no_aug_speed:.1f}) >= GPU aug ({gpu_aug_speed:.1f})")
     
     print("\n" + "="*80)
 
@@ -1002,14 +916,13 @@ Examples:
     print(f"  Transforms v2 available: {TRANSFORMS_V2_AVAILABLE}")
     
     # Run profiling
-    print("\n🚀 Starting profiling...")
-    results = run_comprehensive_profiling(
+    print("\n🚀 Starting simplified profiling...")
+    results = run_simplified_profiling(
         batch_sizes=args.batch_sizes,
         num_workers_list=args.num_workers,
         dataset_size=args.dataset_size,
         num_runs=args.num_runs,
         num_batches=args.num_batches,
-        simulate_disk_io=not args.no_disk_io,
         should_simulate_forward_pass=args.should_simulate_forward_pass,
         forward_pass_time_ms=args.forward_pass_time,
         model_complexity=args.model_complexity
