@@ -47,7 +47,6 @@ class TrainConfig:
 
 @draccus.wrap()
 def main(cfg: TrainConfig):
-    breakpoint()
     print(f'Training {cfg.log.exp_name}...')
     print(f'\tUsing {cfg.compute.workers} workers and {cfg.compute.eval_workers} evaluation workers')
     print(f'\tSaving to {cfg.log.exp_dir}')
